@@ -1,33 +1,34 @@
 import re
 import pandas as pd
+from helper import add_sentiment_column
 
 def preprocess(data):
-    pattern = '\d{1,2}/\d{1,2}/\d{2,4},\s\d{1,2}:\d{2}\s-\s'
+    # Updated pattern to include optional AM/PM for 12-hour format
+    pattern = r'(\d{1,2}/\d{1,2}/\d{2}), (\d{1,2}:\d{2})\s?(AM|PM)? - ([^:]+): (.*)'
 
-    messages = re.split(pattern, data)[1:]
-    dates = re.findall(pattern, data)
+    # Find all matches
+    matches = re.findall(pattern, data)
 
-    df = pd.DataFrame({'user_message': messages, 'message_date': dates})
-    # convert message_date type
-    df['message_date'] = pd.to_datetime(df['message_date'], format='%d/%m/%Y, %H:%M - ')
+    # Debugging: Print number of matches and a sample
+    print(f"Number of matches: {len(matches)}")
+    print(f"Sample matches: {matches[:2]}")
 
-    df.rename(columns={'message_date': 'date'}, inplace=True)
+    # Create DataFrame directly from matches
+    if not matches:
+        raise ValueError("No matches found. Please check your data and regex pattern.")
 
-    users = []
-    messages = []
-    for message in df['user_message']:
-        entry = re.split('([\w\W]+?):\s', message)
-        if entry[1:]:  # user name
-            users.append(entry[1])
-            messages.append(" ".join(entry[2:]))
-        else:
-            users.append('group_notification')
-            messages.append(entry[0])
+    df = pd.DataFrame(matches, columns=['date', 'time', 'period', 'user', 'message'])
 
-    df['user'] = users
-    df['message'] = messages
-    df.drop(columns=['user_message'], inplace=True)
+    # Combine date and time with period to create full datetime string
+    df['datetime'] = df['date'] + ' ' + df['time'] + ' ' + df['period']
 
+    # Convert to datetime
+    df['date'] = pd.to_datetime(df['datetime'], format='%m/%d/%y %I:%M %p', errors='coerce')
+
+    # Drop the 'datetime' column
+    df.drop(columns=['datetime'], inplace=True)
+
+    # Extract date components
     df['only_date'] = df['date'].dt.date
     df['year'] = df['date'].dt.year
     df['month_num'] = df['date'].dt.month
@@ -37,15 +38,17 @@ def preprocess(data):
     df['hour'] = df['date'].dt.hour
     df['minute'] = df['date'].dt.minute
 
+    # Create time periods (12-hour format)
     period = []
-    for hour in df[['day_name', 'hour']]['hour']:
+    for hour in df['hour']:
         if hour == 23:
-            period.append(str(hour) + "-" + str('00'))
+            period.append(f"{hour % 12 or 12}-00 PM")
         elif hour == 0:
-            period.append(str('00') + "-" + str(hour + 1))
+            period.append('12-1 AM')
         else:
-            period.append(str(hour) + "-" + str(hour + 1))
+            next_hour = (hour + 1) % 12 or 12
+            period.append(f"{hour % 12 or 12}-{next_hour} " + ("PM" if hour >= 12 else "AM"))
 
     df['period'] = period
-
+    df = add_sentiment_column(df)
     return df
